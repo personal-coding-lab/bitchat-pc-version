@@ -1,0 +1,11 @@
+# Build intermediates and local publish staging
+**/bin/
+**/obj/
+src/BitchatWindows/publish/
+src/BitchatWindows/publish-fixed/
+src/BitchatWindows/publish-folder/
+
+# Local IDE and user data
+.vs/
+*.user
+*.suo
