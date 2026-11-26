@@ -20,8 +20,11 @@ public partial class MainWindow : Window
     private readonly MessageDeduplicator _deduplicator = new();
     private readonly GossipSync _gossipSync = new();
     private readonly LocalIdentityStore _identityStore = new();
+    private readonly NostrIdentityStore _nostrIdentityStore = new();
     private readonly ChatPreferencesStore _preferencesStore = new();
     private LocalIdentity? _identity;
+    private NostrGeoTransport? _nostrTransport;
+    private string? _geohashChannel;
     private NoiseSessionRegistry? _noiseSessions;
     private readonly NostrRelayProbe _relayProbe = new();
     private readonly ObservableCollection<string> _messages = [];
@@ -51,6 +54,17 @@ public partial class MainWindow : Window
         {
             DiagnosticLog.Write($"Identity unavailable: {ex.Message}");
         }
+        try
+        {
+            _nostrTransport = new NostrGeoTransport(_nostrIdentityStore.LoadOrCreate());
+            _nostrTransport.StatusChanged += status => DiagnosticLog.Write(status);
+            _nostrTransport.MessageReceived += message => Dispatcher.Invoke(() =>
+            {
+                if (_geohashChannel?.Equals(message.Geohash, StringComparison.OrdinalIgnoreCase) == true)
+                    AddRoomMessage("geo-" + message.Geohash, $"[geo] {message.Nickname}  ·  {message.Content}");
+            });
+        }
+        catch (Exception ex) { DiagnosticLog.Write($"Nostr identity unavailable: {ex.Message}"); }
         MessagesList.ItemsSource = _messages;
         _scanner.PeerDiscovered += peer => DiagnosticLog.Write($"BLE advertisement discovered: {peer}");
         _scanner.StatusChanged += status => DiagnosticLog.Write($"BLE scan: {status}");
@@ -65,7 +79,7 @@ public partial class MainWindow : Window
         _meshClient.FrameReceived += frame => Dispatcher.Invoke(() => HandleIncomingFrame(frame));
         _relayProbe.StatusChanged += status => DiagnosticLog.Write($"Nostr relay: {status}");
         Loaded += async (_, _) => { await _meshHost.StartAsync(); await _scanner.StartAsync(); await SendAnnounceAsync(); };
-        Closing += (_, _) => { _scanner.Dispose(); _meshHost.Dispose(); _meshClient.Dispose(); _relayProbe.Dispose(); };
+        Closing += (_, _) => { _scanner.Dispose(); _meshHost.Dispose(); _meshClient.Dispose(); _relayProbe.Dispose(); _nostrTransport?.Dispose(); };
     }
 
     private async void Send_Click(object sender, RoutedEventArgs e) => await AddLocalMessageAsync();
@@ -483,8 +497,17 @@ public partial class MainWindow : Window
             case "file":
                 await SendPrivateFileAsync(argument);
                 break;
+            case "geo":
+                await SetGeohashChannelAsync(argument);
+                break;
+            case "geosay":
+                await SendGeohashMessageAsync(argument);
+                break;
+            case "geopub":
+                AddSystemMessage(_nostrTransport is null ? "Nostr identity unavailable" : $"Nostr public key: {_nostrTransport.PublicKey}");
+                break;
             case "help":
-                AddSystemMessage("commands: /id <name>, /room <name> (or /join), /rooms, /leave, /who, /msg <name> <message>, /file <name> <path>, /ping <name>, /block <name|peer-id>, /unblock <name|peer-id>, /blocks");
+                AddSystemMessage("commands: /id <name>, /room <name> (or /join), /rooms, /leave, /who, /msg <name> <message>, /file <name> <path>, /ping <name>, /geo <geohash|off>, /geosay <message>, /geopub, /block <name|peer-id>, /unblock <name|peer-id>, /blocks");
                 break;
             default:
                 AddSystemMessage($"unknown command: /{command} — type /help");
@@ -512,6 +535,39 @@ public partial class MainWindow : Window
             return;
         }
         AddSystemMessage($"'{argument}' is not a known peer; use its 16-digit peer ID");
+    }
+
+    private async Task SetGeohashChannelAsync(string value)
+    {
+        if (_nostrTransport is null) { AddSystemMessage("Nostr identity unavailable"); return; }
+        if (value.Trim().Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            _geohashChannel = null;
+            if (_nostrTransport.IsConnected) await _nostrTransport.DisconnectAsync();
+            AddSystemMessage("left Nostr geohash channel");
+            return;
+        }
+        var geohash = value.Trim().ToLowerInvariant();
+        try
+        {
+            if (!_nostrTransport.IsConnected) await _nostrTransport.ConnectAsync();
+            await _nostrTransport.SubscribeAsync(geohash);
+            _geohashChannel = geohash;
+            SwitchRoom("geo-" + geohash);
+            AddSystemMessage($"joined Nostr geohash {geohash}");
+        }
+        catch (Exception ex) { DiagnosticLog.Write($"Nostr geohash join failed: {ex.Message}"); AddSystemMessage("could not join Nostr geohash channel"); }
+    }
+
+    private async Task SendGeohashMessageAsync(string content)
+    {
+        if (_nostrTransport is null || string.IsNullOrWhiteSpace(_geohashChannel)) { AddSystemMessage("join a geohash first: /geo <geohash>"); return; }
+        try
+        {
+            await _nostrTransport.PublishAsync(_geohashChannel, _preferences.Nickname, content.Trim());
+            AddRoomMessage("geo-" + _geohashChannel, $"[geo] You  ·  {content.Trim()}");
+        }
+        catch (Exception ex) { DiagnosticLog.Write($"Nostr geohash publish failed: {ex.Message}"); AddSystemMessage("Nostr geohash message was not sent"); }
     }
 
     private void Unblock(string argument)

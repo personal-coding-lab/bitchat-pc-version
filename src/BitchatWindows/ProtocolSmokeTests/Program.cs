@@ -1,4 +1,5 @@
 using BitchatWindows.Protocol;
+using BitchatWindows.Services;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Security;
 
@@ -88,3 +89,13 @@ foreach (var fragment in largeFragments) largeAssembler.TryAppend(fragment, out 
 if (largeComplete is null || !BinaryProtocol.TryDecode(largeComplete, out var largeDecoded) || largeDecoded?.Version != 2 || largeDecoded.Payload.Length != 70_000)
     throw new Exception("v2 encrypted-media fragment round trip failed");
 Console.WriteLine("V2 encrypted-media fragment round-trip passed.");
+
+var nostrIdentity = NostrIdentity.FromPrivateKey(Hex("0000000000000000000000000000000000000000000000000000000000000003"));
+var nostrEventId = System.Security.Cryptography.SHA256.HashData("nostr-geohash-event"u8);
+var nostrSignature = NostrBip340.Sign(nostrEventId, nostrIdentity.PrivateKey, new byte[32]);
+if (!NostrBip340.Verify(nostrEventId, Convert.FromHexString(nostrIdentity.PublicKeyHex), nostrSignature))
+    throw new Exception("BIP-340 Nostr signature rejected");
+nostrSignature[0] ^= 0x01;
+if (NostrBip340.Verify(nostrEventId, Convert.FromHexString(nostrIdentity.PublicKeyHex), nostrSignature))
+    throw new Exception("tampered BIP-340 Nostr signature accepted");
+Console.WriteLine("BIP-340 Nostr signing round-trip passed.");
