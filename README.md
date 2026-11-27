@@ -19,7 +19,7 @@ dotnet run --project ProtocolSmokeTests\ProtocolSmokeTests.csproj -c Release
 dotnet publish -c Release -r win-x64 --self-contained true -o ..\..\publish
 ```
 
-it will be released executive file(.exe). but still converting
+it will be released executive file(.exe) through github. but still converting
 
 The application keeps logs in `%LOCALAPPDATA%\BitchatWindows\diagnostics.log`.
 Received private files are written to `%USERPROFILE%\Downloads\Bitchat`.
